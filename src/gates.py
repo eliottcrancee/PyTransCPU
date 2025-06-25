@@ -3,7 +3,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.hardware import Component, PMOS, NMOS, wire, VCC, GND
+from src.hardware import Bit, Component, PMOS, NMOS, wire, VCC, GND
 
 
 # --- Couche 0 : Abstraction des Portes Logiques (basées sur les transistors) ---
@@ -20,7 +20,7 @@ class NotGate(Component):
         self.nmos = NMOS()
         super().__init__(sub_components=[self.pmos, self.nmos])
 
-    def __call__(self, a: int) -> int:
+    def __call__(self, a: Bit) -> Bit:
         """
         - Si a = LOW (0), le pmos est passant et connecte VCC à la sortie.
         - Si a = HIGH (1), le nmos est passant et connecte GND à la sortie.
@@ -55,7 +55,7 @@ class NandGate(Component):
             sub_components=[self.pmos1, self.pmos2, self.nmos1, self.nmos2]
         )
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         """
         - La sortie est LOW (0) uniquement si A et B sont HIGH (1).
         - Sinon, la sortie est HIGH (1).
@@ -101,7 +101,7 @@ class NorGate(Component):
             sub_components=[self.pmos1, self.pmos2, self.nmos1, self.nmos2]
         )
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         """
         - La sortie est HIGH (1) uniquement si A et B sont LOW (0).
         - Sinon, la sortie est LOW (0).
@@ -145,7 +145,7 @@ class AndGate(Component):
         self.not_gate = NotGate()
         super().__init__(sub_components=[self.nand_gate, self.not_gate])
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         return self.not_gate(self.nand_gate(a, b))
 
     def debug(self):
@@ -169,7 +169,7 @@ class OrGate(Component):
         self.not_gate = NotGate()
         super().__init__(sub_components=[self.nor_gate, self.not_gate])
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         return self.not_gate(self.nor_gate(a, b))
 
     def debug(self):
@@ -197,7 +197,7 @@ class XorGate(Component):
             sub_components=[self.nand1, self.nand2, self.nand3, self.nand4]
         )
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         nand_ab = self.nand1(a, b)
         nand_a_nand_ab = self.nand2(a, nand_ab)
         nand_b_nand_ab = self.nand3(b, nand_ab)
@@ -224,7 +224,7 @@ class XnorGate(Component):
         self.not_gate = NotGate()
         super().__init__(sub_components=[self.xor_gate, self.not_gate])
 
-    def __call__(self, a: int, b: int) -> int:
+    def __call__(self, a: Bit, b: Bit) -> Bit:
         return self.not_gate(self.xor_gate(a, b))
 
     def debug(self):

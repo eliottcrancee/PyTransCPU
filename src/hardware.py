@@ -1,4 +1,5 @@
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Callable, Any, Literal, TypeAlias, Set, cast
+
 
 # --- Nos constantes physiques ---
 
@@ -9,6 +10,15 @@ VCC = HIGH  # Source de tension
 GND = LOW  # Masse
 
 # --- Nos composants de base ---
+
+
+Bit: TypeAlias = Literal[0, 1]
+Signal: TypeAlias = Union[
+    Bit, None
+]  # Un signal peut être un bit ou None (haute impédance)
+Signal8: TypeAlias = Tuple[
+    Signal, Signal, Signal, Signal, Signal, Signal, Signal, Signal
+]
 
 
 class Component:
@@ -49,9 +59,7 @@ class PMOS(Component):
         super().__init__()
         self.transistor_count = 1  # Un PMOS est un transistor.
 
-    def __call__(
-        self, gate: Union[int, None], source: Union[int, None]
-    ) -> Union[int, None]:
+    def __call__(self, gate: Signal, source: Signal) -> Signal:
         """
         Si la grille est à LOW, le transistor est passant (renvoie la source).
         Sinon, il est bloqué (haute impédance -> None).
@@ -70,9 +78,7 @@ class NMOS(Component):
         super().__init__()
         self.transistor_count = 1  # Un NMOS est un transistor.
 
-    def __call__(
-        self, gate: Union[int, None], source: Union[int, None]
-    ) -> Union[int, None]:
+    def __call__(self, gate: Signal, source: Signal) -> Signal:
         """
         Si la grille est à HIGH, le transistor est passant (renvoie la source).
         Sinon, il est bloqué (haute impédance -> None).
@@ -82,33 +88,69 @@ class NMOS(Component):
         return None
 
 
-def wire(*signals: Union[int, None]) -> Union[int, None]:
+def wire(*signals: Signal) -> Signal:
     """
     Simule un fil connectant plusieurs sorties.
     Renvoie le premier signal qui n'est pas en haute impédance.
     En CMOS, il ne devrait y en avoir qu'un seul.
     """
-    active_signals = set([s for s in signals if s is not None])
+    active_signals: Set[Bit] = {cast(Bit, s) for s in signals if s is not None}
 
     if len(active_signals) > 1:
         raise ValueError(
             f"Conflit sur le fil : plusieurs signaux actifs détectés {active_signals}"
         )
 
-    return list(active_signals)[0] if active_signals else None
+    if len(active_signals) == 0:
+        return None
+
+    else:
+        return active_signals.pop()
 
 
-def bus8bits(*signals: Tuple[Union[int, None], ...]) -> Tuple[Union[int, None], ...]:
+def bus8bits(*signals: Signal8) -> Signal8:
     """
     Simule un bus de données de 8 bits.
     Renvoie un tuple de 8 signaux, chacun étant le premier signal non en haute impédance.
     """
 
-    for signal in signals:
-        if len(signal) != 8:
-            raise ValueError("Chaque signal doit être un tuple de 8 bits.")
+    s0, s1, s2, s3, s4, s5, s6, s7 = zip(*signals)
 
-    return tuple(wire(*signal) for signal in zip(*signals))
+    return (
+        wire(*s0),
+        wire(*s1),
+        wire(*s2),
+        wire(*s3),
+        wire(*s4),
+        wire(*s5),
+        wire(*s6),
+        wire(*s7),
+    )
+
+
+def stabilize(
+    get_state: Callable[[], Tuple[Any, ...]],
+    update_state: Callable[[], None],
+    max_iter: int = 3,
+) -> bool:
+    """
+    Simule la stabilisation électrique d'un circuit rétro-bouclé.
+
+    Args:
+        get_state: fonction qui retourne les états à surveiller (ex: [q, q̅]).
+        update_state: fonction qui met à jour les états à chaque itération logique.
+        max_iter: nombre maximum d'itérations de stabilisation (évite les boucles infinies).
+
+    Returns:
+        True si le circuit s'est stabilisé (état constant atteint), False sinon.
+    """
+    for _ in range(max_iter):
+        prev = get_state()
+        update_state()
+        if get_state() == prev:
+            return True
+    print("⚠️ Avertissement : le circuit ne s'est pas stabilisé.")
+    return False
 
 
 if __name__ == "__main__":

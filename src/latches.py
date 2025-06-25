@@ -1,10 +1,10 @@
 import sys
 import os
-from typing import Tuple, Union
+from typing import Tuple
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.hardware import Component, HIGH, LOW, NMOS
+from src.hardware import Bit, Signal, Component, NMOS, HIGH, LOW, stabilize
 from src.gates import NorGate, AndGate, NotGate
 from src.mux import Mux2x1
 
@@ -20,10 +20,10 @@ class SRLatch(Component):
         self.nor2 = NorGate()
         super().__init__(sub_components=[self.nor1, self.nor2])
         self.bit_count = 1  # Un latch SR stocke un bit.
-        self.q = LOW
-        self.q_bar = HIGH
+        self.q: Bit = LOW
+        self.q_bar: Bit = HIGH
 
-    def __call__(self, set_signal: int, reset_signal: int) -> Tuple[int, int]:
+    def __call__(self, set_signal: Bit, reset_signal: Bit) -> Tuple[Bit, Bit]:
         """
         Met à jour l'état du latch SR en fonction des signaux d'entrée.
         Simule une stabilisation de l'état du latch.
@@ -32,10 +32,14 @@ class SRLatch(Component):
             set_signal == LOW or reset_signal == LOW
         ), "Les signaux SET et RESET ne peuvent pas être HIGH en même temps."
 
-        for _ in range(2):
-            # Simule la stabilisation de l'état électrique
+        def get_state() -> Tuple[Bit, Bit]:
+            return (self.q, self.q_bar)
+
+        def update():
             self.q_bar = self.nor1(set_signal, self.q)
             self.q = self.nor2(reset_signal, self.q_bar)
+
+        stabilize(get_state, update)  # type: ignore
 
         return self.q, self.q_bar
 
@@ -70,14 +74,14 @@ class DLatch(Component):
         )
 
     @property
-    def q(self) -> int:
+    def q(self) -> Bit:
         return self.sr_latch.q
 
     @property
-    def q_bar(self) -> int:
+    def q_bar(self) -> Bit:
         return self.sr_latch.q_bar
 
-    def __call__(self, data: int, enable: int) -> Tuple[int, int]:
+    def __call__(self, data: Bit, enable: Bit) -> Tuple[Bit, Bit]:
         """
         Met à jour l'état du latch D en fonction des signaux d'entrée.
         Si enable est HIGH, le latch prend la valeur de data.
@@ -118,14 +122,14 @@ class DFlipFlop(Component):
         self.bit_count = 1  # Un flip-flop D stocke un bit.
 
     @property
-    def q(self) -> int:
+    def q(self) -> Bit:
         return self.slave_d_latch.q
 
     @property
-    def q_bar(self) -> int:
+    def q_bar(self) -> Bit:
         return self.slave_d_latch.q_bar
 
-    def __call__(self, data: int, clock: int) -> Tuple[int, int]:
+    def __call__(self, data: Bit, clock: Bit) -> Tuple[Bit, Bit]:
         """
         Met à jour l'état du flip-flop D en fonction des signaux d'entrée.
         Le flip-flop prend la valeur de data à chaque front montant du clock.
@@ -173,17 +177,18 @@ class DFlipFlopSave(Component):
         self.bit_count = 1  # Un flip-flop D stocke un bit.*
 
     @property
-    def q(self) -> int:
+    def q(self) -> Bit:
         return self.slave_d_latch.q
 
     @property
-    def q_bar(self) -> int:
+    def q_bar(self) -> Bit:
         return self.slave_d_latch.q_bar
 
-    def __call__(self, data: int, clock: int, save: int) -> Tuple[int, int]:
+    def __call__(self, data: Bit, clock: Bit, save: Bit) -> Tuple[Bit, Bit]:
         """
         Met à jour l'état du flip-flop D avec un signal de sauvegarde.
-        Si save est HIGH, le flip-flop prend la valeur de data.
+        Si save est HIGH, le flip-flop prend la valeur de data à chaque
+        front montant du clock.
         Si save est LOW, le flip-flop conserve sa valeur précédente.
         """
 
@@ -238,16 +243,16 @@ class DFlipFlopSaveLoad(Component):
         )
 
     @property
-    def q(self) -> int:
+    def q(self) -> Bit:
         return self.d_flip_flop_save.q
 
     @property
-    def q_bar(self) -> int:
+    def q_bar(self) -> Bit:
         return self.d_flip_flop_save.q_bar
 
     def __call__(
-        self, data: int, clock: int, save: int, load: int
-    ) -> Tuple[Union[int, None], Union[int, None]]:
+        self, data: Bit, clock: Bit, save: Bit, load: Bit
+    ) -> Tuple[Signal, Signal]:
         """
         Met à jour l'état du flip-flop D avec un signal de sauvegarde et de chargement.
         """
@@ -268,6 +273,8 @@ if __name__ == "__main__":
     # Exécution des tests de débogage
 
     sr_latch = SRLatch()
+    sr_latch(1, 0)
+    sr_latch(0, 1)
     print(sr_latch)
     sr_latch.debug()
 
