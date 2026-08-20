@@ -1,183 +1,294 @@
-### Les Règles du Jeu (Notre Contrat de Simulation)
+# PyTransCPU
 
-1.  **Les États Physiques :** On ne manipule que deux états, représentant une tension haute et une tension basse. On les modélisera en Python par des booléens, c'est le plus simple.
-    ```python
-    HIGH = True  # Représente VCC (tension d'alimentation)
-    LOW = False  # Représente GND (la masse)
-    ```
-2.  **Le Composant de Base :** Le transistor. On n'a le droit d'utiliser que des fonctions modélisant des transistors NMOS et PMOS. Toute autre logique (`if`, `and`, `or`, `not` de Python) est interdite *dans la création de nos composants logiques*.
-3.  **Le Câblage :** L'assignation `variable = resultat_fonction()` est autorisée. Elle ne représente pas un stockage de donnée au sens d'un registre, mais simplement un "fil" qui connecte la sortie d'un composant à l'entrée d'un autre.
-4.  **État et Mémoire :** C'est le point le plus délicat. Un CPU a besoin d'état (registres, PC). Pour simuler un composant qui a un état (comme une bascule), on devra modéliser le temps. On le fera en passant l'état précédent du composant en argument de la fonction, qui retournera le nouvel état. La boucle principale de notre simulation (l'horloge) se chargera de maintenir cet état d'un cycle à l'autre.
-5.  **L'Horloge :** L'horloge sera une simple boucle `for` ou `while` en Python. C'est le "moteur" externe de notre simulation, qui fait avancer le temps discret.
+**From a single transistor to a working SAP-1 CPU — simulated in Python.**
 
-En logique CMOS (Complementary Metal-Oxide-Semiconductor), on utilise deux types de transistors qui fonctionnent de manière opposée.
+PyTransCPU is an educational, bottom-up simulation of a complete CPU. It
+models a machine literally from its most elementary physical components: PMOS
+and NMOS transistors. On top of them it builds every logic gate, every
+multiplexer, every adder, every flip-flop, and finally a full computer — the
+SAP-1 ("Simple As Possible 1") described in classic textbooks and popularized
+by the Ben Eater breadboard-computer series.
 
-*   **Transistor NMOS :** Quand sa grille (gate) est à `HIGH`, il laisse passer le courant entre sa source et son drain. C'est comme un interrupteur fermé. Quand la grille est à `LOW`, il bloque le courant (interrupteur ouvert).
-*   **Transistor PMOS :** C'est l'inverse. Quand sa grille est à `LOW`, il laisse passer le courant. Quand la grille est à `HIGH`, il bloque.
+The project is deliberately *naive*: it never relies on Python's built-in
+boolean operators inside the hardware layer. `not`, `and`, `or` and high-level
+tricks are forbidden when building the logic gates; everything is wired by
+hand from transistors, exactly the way real digital hardware is built.
 
-On peut les modéliser comme des fonctions Python. Pour simuler l'état "déconnecté" (haute impédance), on utilisera `None`.
+---
 
-```python
-# --- Nos constantes physiques ---
-HIGH = True
-LOW = False
-VCC = HIGH  # Source de tension
-GND = LOW   # Masse
+## The signal model
 
-# --- Nos composants de base ---
+Hardware only deals with two electrical states, plus one special state for
+"disconnected" wires:
 
-def pmos(gate, source):
-    """
-    Simule un transistor PMOS.
-    Si la grille est à LOW, le transistor est passant (renvoie la source).
-    Sinon, il est bloqué (haute impédance -> None).
-    """
-    if gate == LOW:
-        return source
-    return None
+| Value | Meaning                                  | Python   |
+|-------|------------------------------------------|----------|
+| `1`   | HIGH voltage (`VCC`, supply rail)        | `HIGH`   |
+| `0`   | LOW voltage (`GND`, ground)              | `LOW`    |
+| `None`| Z / high-impedance (floating wire)       | `Z`      |
 
-def nmos(gate, source):
-    """
-    Simule un transistor NMOS.
-    Si la grille est à HIGH, le transistor est passant (renvoie la source).
-    Sinon, il est bloqué (haute impédance -> None).
-    """
-    if gate == HIGH:
-        return source
-    return None
+Bits are always stored *least-significant bit first*. For instance the byte
+`(1, 0, 1)` represents the value `5`.
+
+This model is deliberately numeric and pedagogical. It does not simulate
+real voltages, currents, capacitances or propagation latencies.
+
+---
+
+## Architecture: a bottom-up stack
+
+Everything is assembled tier by tier. Each layer only uses the one below it:
+
+```
+transistors (NMOS / PMOS)
+        |
+        v
+logic gates (NOT, NAND, NOR, AND, OR, XOR, XNOR)
+        |
+        v
+multiplexers / decoders
+        |
+        v
+adders and the ALU
+        |
+        v
+latches, flip-flops, registers, RAM
+        |
+        v
+CPU (SAP-1)
 ```
 
-Pour connecter la sortie de plusieurs transistors, on a besoin d'un "fil". Si un transistor est passant vers VCC et l'autre vers GND, il y a un court-circuit. Notre modèle ne gérera pas ça, mais la logique CMOS est conçue pour l'éviter. Un seul des chemins (vers VCC ou vers GND) doit être actif à la fois.
+### Project layout
 
-```python
-def wire(*signals):
-    """
-    Simule un fil connectant plusieurs sorties.
-    Renvoie le premier signal qui n'est pas en haute impédance.
-    En CMOS, il ne devrait y en avoir qu'un seul.
-    """
-    for signal in signals:
-        if signal is not None:
-            return signal
-    return None # État flottant, ce qui est une erreur de conception en CMOS
+```
+pytranscpu/
+    hardware.py    # transistors, wire, bus, signal model, cost, helpers
+    gates.py       # logic gates built from transistors
+    mux.py         # 2:1 and 8-bit multiplexers
+    decoder.py     # 2-to-4 and 4-to-16 decoders
+    arithmetic.py  # half/full adders, 8-bit adder, ALU
+    latches.py     # SR latch, D latch, D flip-flops, ring counter
+    memory.py      # 8-bit register, program counter, 256-bit RAM
+    cpu_sap1.py    # control unit + the whole SAP-1 computer
+
+test/              # pytest suite for every module
 ```
 
 ---
 
-### Étape 2 : Les Portes Logiques Fondamentales (NOT, NAND, NOR)
+## Modules
 
-Avec nos transistors, on peut maintenant construire nos premières portes. C'est la magie du CMOS !
+### `hardware.py` — the physical primitives
 
-#### Porte NOT (Inverseur)
+The lowest layer knows neither instructions nor assemblers. It provides:
 
-C'est la plus simple. Un PMOS connecte la sortie à VCC, un NMOS la connecte à GND. Leurs grilles sont connectées ensemble à l'entrée `a`.
+- the **NMOS** and **PMOS** transistor primitives, modelled as callables that
+gate a `source` towards their `drain` based on a `gate` signal;
+- **`wire`**, which connects several outputs (with high-impedance handling)
+and `bus8`, which resolves an 8-bit shared bus;
+- the `Bit` / `Byte` / `Bus` types and the `HIGH`, `LOW`, `VCC`, `GND`,
+`HIGH_IMPEDANCE` constants;
+- **`HardwareCost`** — a simple transistor / memory-bit counter, exposed by
+every component;
+- helpers such as `bits_to_int`, `int_to_bits` and `stabilize` (for feedback
+circuits like latches);
+- a set of explicit exceptions for hardware errors (invalid signals, bus
+conflicts, unstable circuits).
 
-*   Si `a` est `HIGH` : le PMOS est bloqué, le NMOS est passant. La sortie est connectée à GND -> `LOW`.
-*   Si `a` est `LOW` : le PMOS est passant, le NMOS est bloqué. La sortie est connectée à VCC -> `HIGH`.
+### `gates.py` — logic gates
 
-```python
-def not_gate(a):
-    """Porte NON, construite avec des transistors."""
-    # Le réseau "pull-up" (vers VCC) est fait de PMOS
-    pull_up = pmos(a, VCC)
-    # Le réseau "pull-down" (vers GND) est fait de NMOS
-    pull_down = nmos(a, GND)
-    
-    return wire(pull_up, pull_down)
+The three primitive gates are wired at the transistor level:
+`NotGate` (1 PMOS + 1 NMOS), `NandGate`, `NorGate`. Every other gate is
+composed from them: `AndGate`, `OrGate`, `XorGate`, `XnorGate`.
 
-# Testons !
-print(f"NOT(LOW)  -> {not_gate(LOW)}")   # Attendu: True (HIGH)
-print(f"NOT(HIGH) -> {not_gate(HIGH)}")  # Attendu: False (LOW)
-```
+### `mux.py` — multiplexers
 
-#### Porte NAND (NON-ET)
+`Mux2x1` selects one of two inputs with a `select` line
+`(a AND NOT select) OR (b AND select)`; `Mux8bits2x1` places eight of them in
+parallel.
 
-*   **Réseau Pull-up (PMOS) :** Deux PMOS en parallèle. Si `a` OU `b` est `LOW`, la sortie est `HIGH`.
-*   **Réseau Pull-down (NMOS) :** Deux NMOS en série. Si `a` ET `b` sont `HIGH`, la sortie est `LOW`.
+### `decoder.py` — decoders
 
-```python
-def nand_gate(a, b):
-    """Porte NON-ET, construite avec des transistors."""
-    # Pull-up : PMOS en parallèle
-    pull_up = wire(pmos(a, VCC), pmos(b, VCC))
-    
-    # Pull-down : NMOS en série
-    # La sortie du premier NMOS est la source du second
-    gnd_connection = nmos(a, GND)
-    pull_down = nmos(b, gnd_connection)
-    
-    return wire(pull_up, pull_down)
+`Decoder2to4` activates exactly one output line for a 2-bit input;
+`Decoder4to16` cascades two of them. These decode RAM addresses.
 
-# Testons !
-print("\n--- Porte NAND ---")
-print(f"NAND(LOW, LOW)   -> {nand_gate(LOW, LOW)}")    # Attendu: True
-print(f"NAND(LOW, HIGH)  -> {nand_gate(LOW, HIGH)}")   # Attendu: True
-print(f"NAND(HIGH, LOW)  -> {nand_gate(HIGH, LOW)}")   # Attendu: True
-print(f"NAND(HIGH, HIGH) -> {nand_gate(HIGH, HIGH)}")  # Attendu: False
-```
+### `arithmetic.py` — adders and the ALU
 
-#### Porte NOR (NON-OU)
+`HalfAdder`, `FullAdder` and `Adder8Bits` (an 8-bit ripple-carry chain) build
+up to `ALU8Bits`. The ALU computes `A + B` or `A - B` depending on a
+`subtract` signal (two's-complement via `A + NOT B + 1`) and exposes a **carry**
+flag and a **zero** flag. Its result bus is gated by a `load` signal so it can
+float in high impedance and share the bus with other drivers.
 
-C'est la structure duale de la NAND.
+### `latches.py` — sequential memory
 
-*   **Réseau Pull-up (PMOS) :** Deux PMOS en série. Si `a` ET `b` sont `LOW`, la sortie est `HIGH`.
-*   **Réseau Pull-down (NMOS) :** Deux NMOS en parallèle. Si `a` OU `b` sont `HIGH`, la sortie est `LOW`.
+The sequential (stateful) components:
 
-```python
-def nor_gate(a, b):
-    """Porte NON-OU, construite avec des transistors."""
-    # Pull-up : PMOS en série
-    vcc_connection = pmos(a, VCC)
-    pull_up = pmos(b, vcc_connection)
-    
-    # Pull-down : NMOS en parallèle
-    pull_down = wire(nmos(a, GND), nmos(b, GND))
-    
-    return wire(pull_up, pull_down)
-    
-# Testons !
-print("\n--- Porte NOR ---")
-print(f"NOR(LOW, LOW)   -> {nor_gate(LOW, LOW)}")    # Attendu: True
-print(f"NOR(LOW, HIGH)  -> {nor_gate(LOW, HIGH)}")   # Attendu: False
-print(f"NOR(HIGH, LOW)  -> {nor_gate(HIGH, LOW)}")   # Attendu: False
-print(f"NOR(HIGH, HIGH) -> {nor_gate(HIGH, HIGH)}")  # Attendu: False
+| Component              | Purpose                                  |
+|------------------------|------------------------------------------|
+| `SRLatch`              | two cross-coupled NOR gates, one bit     |
+| `DLatch`               | transparent while `enable` is HIGH       |
+| `DFlipFlop`            | updates only on a rising clock edge      |
+| `DFlipFlopSave`        | write gated by a `save` signal           |
+| `DFlipFlopSaveLoad`    | save, with `load`-gated outputs (tri-state)|
+| `OneHotCounter6Bits`   | 6-bit ring counter (the micro-step sequencer) |
+
+### `memory.py` — storage components
+
+- `Register8Bits` — eight D flip-flops with save/load;
+- `ProgramCounter4Bits` — self-incrementing 4-bit counter, with load;
+- `Ram256Bits` — 16 registers of 8 bits, addressed by a 4-to-16 decoder
+(256 physical bits).
+
+### `cpu_sap1.py` — the SAP-1 computer
+
+The final assembly: a `ProgramCounter`, `MemoryAddressRegister`, `Instruction
+Register`, `Accumulator`, `B Register`, `ALU`, `RAM`, a 6-state micro-step
+sequencer, and a `ControlUnit` that generates every control signal purely from
+logic gates. It performs the classic **fetch-decode-execute** cycle.
+
+---
+
+## The SAP-1 instruction set
+
+Instructions are single bytes: the high nibble is the opcode, the low nibble is
+the memory operand.
+
+| Opcode (bin) | Hex | Instruction | Effect                     |
+|--------------|-----|-------------|----------------------------|
+| `0000`       | `0` | `NOP`       | no operation               |
+| `0001`       | `1` | `LDA`       | `A <- MEM[operand]`        |
+| `0010`       | `2` | `ADD`       | `A <- A + MEM[operand]`    |
+| `0011`       | `3` | `SUB`       | `A <- A - MEM[operand]`    |
+| `0100`       | `4` | `STA`       | `MEM[operand] <- A`        |
+| `0101`       | `5` | `LDI`       | `A <- constant (operand)`  |
+| `0110`       | `6` | `JMP`       | `PC <- operand`            |
+| `0111`       | `7` | `JZ`        | `PC <- operand if ACC == 0`|
+| `1000`       | `8` | `JC`        | `PC <- operand if CARRY`   |
+| `1111`       | `F` | `HLT`       | halt the computer          |
+
+---
+
+## Installation
+
+The project is managed with [uv](https://github.com/astral-sh/uv) and targets
+Python 3.13+.
+
+```powershell
+# Create the environment and install dependencies
+uv sync
+
+# Activate it (or prefix any command with `uv run`)
+.venv\Scripts\Activate.ps1
 ```
 
 ---
 
-### Prochaines Étapes : La Suite du Voyage
+## Quick start
 
-Félicitations ! Vous venez de créer les briques fondamentales de tout ordinateur moderne à partir d'une simulation de la physique des semi-conducteurs. Vous n'avez "triché" à aucun moment.
+Build the CPU, load a small program into RAM and run it:
 
-Voici la feuille de route pour la suite :
+```python
+from pytranscpu.cpu_sap1 import SAP1
+from pytranscpu.hardware import bits_to_int
 
-1.  **Construire les autres portes (AND, OR, XOR) :** Maintenant que nous avons NAND et NOT (qui sont des portes universelles), on peut construire toutes les autres par composition. Par exemple, `AND(a, b)` est simplement `NOT(NAND(a, b))`. C'est la première couche d'abstraction.
+cpu = SAP1()
+print("Transistors:", cpu.transistor_count)
+print("Memory bits:", cpu.bit_count)
 
-2.  **L'Arithmétique (Additionneurs) :**
-    *   **Demi-Additionneur (Half Adder) :** Prend deux bits en entrée (A, B) et sort une Somme (S) et une Retenue (Carry, C).
-        *   `S = XOR(A, B)`
-        *   `C = AND(A, B)`
-    *   **Additionneur Complet (Full Adder) :** Prend trois bits (A, B, Carry_in) et sort une Somme et une Retenue (Carry_out). On le construit avec deux demi-additionneurs.
-    *   **Additionneur N-bits :** On chaîne N additionneurs complets pour additionner des nombres de N bits.
+# Load a program: LDI 10, HLT
+cpu.load_program([0x5A, 0xF0])
+cpu.run()
 
-3.  **La Mémoire (Le plus grand défi de la simulation) :**
-    *   **Bascule SR (SR Latch) :** Le composant mémoire le plus simple, créé avec deux portes NOR (ou NAND) interconnectées. C'est ici que le concept d'état apparaît. On devra gérer la boucle de feedback dans notre simulation.
-    *   **Bascule D (D Latch & D Flip-Flop) :** La brique de base pour les registres. Elle stocke un bit, mais ne change sa valeur que sur un signal d'horloge. C'est ce qui permet de synchroniser le CPU.
+print("Halted:", cpu.halted)
+print("Accumulator:", bits_to_int(cpu.out))  # -> 10
+```
 
-4.  **L'Unité Arithmétique et Logique (ALU) :**
-    *   Combine l'additionneur N-bits avec des portes logiques (AND, OR, etc.) sur N bits.
-    *   Utilise un **Multiplexeur** (que nous devrons aussi construire avec des portes) pour sélectionner l'opération à effectuer (ADD, AND, OR...) en fonction d'un code d'opération.
+A commented multiply-by-loop example lives in `debug_loop.py`; a low-level
+step-by-step debugger in `debug_sap1.py`.
 
-5.  **Assemblage du CPU :**
-    *   **Registres :** Des ensembles de D-Flip-Flops pour stocker les données temporaires (ex: R1, R2...).
-    *   **Compteur de Programme (Program Counter - PC) :** Un registre spécial qui contient l'adresse de la prochaine instruction à exécuter et qui peut s'incrémenter.
-    *   **Unité de Contrôle :** Décode l'instruction en cours et génère les signaux pour l'ALU, les registres, la mémoire... C'est le chef d'orchestre.
-    *   **Mémoire (RAM) :** Pour la simulation, on peut la représenter comme un gros tableau de registres, adressable via un **Décodeur** (également fait de portes).
+### Driving the clock manually
 
-6.  **Exécuter un programme :**
-    *   Définir un jeu d'instructions simple (ISA - Instruction Set Architecture).
-    *   Écrire un petit programme en "assembleur" (ex: "additionner 3 et 5").
-    *   Le traduire en binaire et le "charger" dans notre RAM simulée.
-    *   Lancer la boucle d'horloge et regarder notre CPU exécuter le cycle "Fetch-Decode-Execute".
+The shared clock and the micro-step sequencer can be advanced by hand, which is
+useful for understanding the internal state transitions:
 
-Je vous propose de continuer étape par étape. Voulez-vous que l'on passe maintenant à la construction des portes composées (AND, OR, XOR) et des premiers circuits arithmétiques ?
+```python
+cpu = SAP1()
+cpu.load_program([0x57, 0xF0])   # LDI 7, HLT
+cpu.clock_tick()      # toggle the shared clock, returns the new value
+cpu.update()          # perform one micro-state transition
+cpu.micro_step()      # advance the sequencer by one micro-state
+cpu.step_instruction()  # advance until the next fetch (or halted)
+cpu.run()             # run until halted (or max_steps)
+```
+
+Register and RAM contents are inspectable at any time, e.g.
+`cpu.accumulator.state`, `cpu.program_counter.state[:4]`,
+`cpu.zero_flag.state[0]`, `cpu.ram.registers[0xD].state`.
+
+---
+
+## Examples
+
+### A loop that multiplies 3 × 5, then halts
+
+```python
+from pytranscpu.cpu_sap1 import SAP1
+from pytranscpu.hardware import bits_to_int
+
+cpu = SAP1()
+program = [
+    0x1F,  # 0: LDA 0xF   (load running sum)
+    0x2E,  # 1: ADD 0xE   (add 3)
+    0x4F,  # 2: STA 0xF   (store back to sum)
+    0x1D,  # 3: LDA 0xD   (load count)
+    0x3C,  # 4: SUB 0xC   (subtract 1)
+    0x79,  # 5: JZ 9      (if count reached 0, jump)
+    0x4D,  # 6: STA 0xD   (save decremented count)
+    0x60,  # 7: JMP 0     (loop)
+    0x00,  # 8: NOP
+    0x1F,  # 9: LDA 0xF   (load final sum)
+    0xF0,  # A: HLT
+    0x00, 0x01, 0x05, 0x03, 0x00,  # B..F: unused, 1, count=5, 3, sum=0
+]
+cpu.load_program(program)
+cpu.run(max_steps=500)
+print(bits_to_int(cpu.out))   # -> 15
+```
+
+---
+
+## Running the tests
+
+The project ships a pytest suite covering every module, including end-to-end
+instruction tests for the CPU.
+
+```powershell
+uv run pytest
+```
+
+---
+
+## The design rules (the simulation contract)
+
+The project follows strict rules so nothing is "cheated".
+
+1. **Two physical states only.** A boolean models a high or low voltage.
+2. **The transistor is the only primitive.** Only the `NMOS` / `PMOS` models
+   may use Python logic; building the gates must not use Python's `if`,
+   `and`, `or` or `not`.
+3. **Assignments are wires.** `x = fn(...)` connects an output to an input;
+   it is not a register.
+4. **State and time.** Stateful parts (flip-flops, registers, PC) take their
+   previous state as an argument and return the new one. The clock loop keeps
+   the state between cycles.
+5. **The clock is the external engine.** A simple Python loop drives discrete
+time forward.
+
+---
+
+## License
+
+This project is distributed under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See the [LICENSE](LICENSE) file for the full text.
